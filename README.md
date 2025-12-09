@@ -1,1023 +1,1491 @@
-# **API интерфейсы для интеграции с системой колледжа**
 
-## **1. API: Получение списка студентов группы**
 
-### **Информация об API:**
-- **Название:** Students API
-- **Путь:** `/api/v1/groups/{group_id}/students`
-- **Описание:** Получение списка студентов конкретной группы
 
-### **Запрос:**
-```
-GET /api/v1/groups/IT-21-1/students
-Headers:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-```
+### **1. StudentsController.cs**
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
 
-### **Ответ (200 OK):**
-```json
+namespace CollegeSystem.API.Controllers
 {
-  "status": "success",
-  "data": {
-    "group_id": "IT-21-1",
-    "group_name": "Информационные технологии 2021",
-    "students": [
-      {
-        "student_id": "ST2021001",
-        "last_name": "Иванов",
-        "first_name": "Иван",
-        "middle_name": "Иванович",
-        "email": "ivanov@college.ru",
-        "phone": "+79991234567",
-        "status": "active",
-        "enrollment_date": "2021-09-01"
-      },
-      {
-        "student_id": "ST2021002",
-        "last_name": "Петрова",
-        "first_name": "Мария",
-        "middle_name": "Сергеевна",
-        "email": "petrova@college.ru",
-        "phone": "+79991234568",
-        "status": "active",
-        "enrollment_date": "2021-09-01"
-      }
-    ],
-    "total": 25,
-    "curator": {
-      "teacher_id": "TC2020001",
-      "last_name": "Сидоров",
-      "first_name": "Алексей"
+    [ApiController]
+    [Route("api/v1/[controller]")]
+    public class StudentsController : ControllerBase
+    {
+        private readonly IStudentService _studentService;
+        private readonly IAuthorizationService _authService;
+        private readonly ILogger<StudentsController> _logger;
+
+        public StudentsController(
+            IStudentService studentService,
+            IAuthorizationService authService,
+            ILogger<StudentsController> logger)
+        {
+            _studentService = studentService;
+            _authService = authService;
+            _logger = logger;
+        }
+
+        [HttpGet("groups/{groupId}/students")]
+        public async Task<IActionResult> GetGroupStudents(string groupId)
+        {
+            try
+            {
+                // Проверка авторизации
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (!await _authService.ValidateTokenAsync(token))
+                {
+                    return Unauthorized(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "UNAUTHORIZED",
+                        Message = "Требуется авторизация"
+                    });
+                }
+
+                // Проверка доступа к группе
+                if (!await _authService.HasAccessToGroupAsync(token, groupId))
+                {
+                    return StatusCode(403, new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "ACCESS_DENIED",
+                        Message = "Доступ запрещен"
+                    });
+                }
+
+                // Получение студентов
+                var students = await _studentService.GetStudentsByGroupAsync(groupId);
+                if (students == null || students.Count == 0)
+                {
+                    return NotFound(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "GROUP_NOT_FOUND",
+                        Message = "Группа не найдена"
+                    });
+                }
+
+                // Формирование ответа
+                var response = new GroupStudentsResponse
+                {
+                    GroupId = groupId,
+                    GroupName = students[0].GroupName,
+                    Students = students,
+                    Total = students.Count,
+                    Curator = await _studentService.GetGroupCuratorAsync(groupId)
+                };
+
+                return Ok(new ApiResponse<GroupStudentsResponse>
+                {
+                    Success = true,
+                    Data = response
+                });
+            }
+            catch (System.Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при получении студентов группы {GroupId}", groupId);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = "INTERNAL_SERVER_ERROR",
+                    Message = "Внутренняя ошибка сервера"
+                });
+            }
+        }
     }
-  }
 }
 ```
 
-### **Ответ (404 Not Found):**
-```json
+### **2. AssignmentsController.cs**
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+using System;
+
+namespace CollegeSystem.API.Controllers
 {
-  "status": "error",
-  "message": "Группа не найдена",
-  "code": "GROUP_NOT_FOUND"
+    [ApiController]
+    [Route("api/v1/[controller]")]
+    public class AssignmentsController : ControllerBase
+    {
+        private readonly IAssignmentService _assignmentService;
+        private readonly IAuthorizationService _authService;
+        private readonly IValidationService _validationService;
+        private readonly ILogger<AssignmentsController> _logger;
+
+        public AssignmentsController(
+            IAssignmentService assignmentService,
+            IAuthorizationService authService,
+            IValidationService validationService,
+            ILogger<AssignmentsController> logger)
+        {
+            _assignmentService = assignmentService;
+            _authService = authService;
+            _validationService = validationService;
+            _logger = logger;
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> CreateAssignment([FromBody] CreateAssignmentRequest request)
+        {
+            try
+            {
+                // Проверка авторизации
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (!await _authService.ValidateTokenAsync(token))
+                {
+                    return Unauthorized(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "UNAUTHORIZED",
+                        Message = "Требуется авторизация"
+                    });
+                }
+
+                // Проверка прав (только преподаватели)
+                if (!await _authService.IsTeacherAsync(token))
+                {
+                    return StatusCode(403, new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "FORBIDDEN",
+                        Message = "Только преподаватели могут создавать задания"
+                    });
+                }
+
+                // Валидация запроса
+                var (isValid, errorMessage) = _validationService.ValidateAssignmentRequest(request);
+                if (!isValid)
+                {
+                    return BadRequest(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "INVALID_REQUEST",
+                        Message = errorMessage
+                    });
+                }
+
+                // Создание задания
+                var assignment = await _assignmentService.CreateAssignmentAsync(request);
+
+                return CreatedAtAction(
+                    nameof(CreateAssignment),
+                    new { id = assignment.AssignmentId },
+                    new ApiResponse<AssignmentResponse>
+                    {
+                        Success = true,
+                        Data = assignment
+                    });
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = ex.ErrorCode,
+                    Message = ex.Message
+                });
+            }
+            catch (System.Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при создании задания");
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = "INTERNAL_SERVER_ERROR",
+                    Message = "Внутренняя ошибка сервера"
+                });
+            }
+        }
+
+        [HttpPut("{assignmentId}/grades")]
+        public async Task<IActionResult> UpdateGrade(string assignmentId, [FromBody] UpdateGradeRequest request)
+        {
+            try
+            {
+                // Проверка авторизации
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (!await _authService.ValidateTokenAsync(token))
+                {
+                    return Unauthorized(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "UNAUTHORIZED",
+                        Message = "Требуется авторизация"
+                    });
+                }
+
+                // Проверка прав (только преподаватели)
+                if (!await _authService.IsTeacherAsync(token))
+                {
+                    return StatusCode(403, new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "FORBIDDEN",
+                        Message = "Только преподаватели могут выставлять оценки"
+                    });
+                }
+
+                // Валидация оценки
+                if (request.Grade < 0 || request.Grade > 100)
+                {
+                    return BadRequest(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "INVALID_GRADE_VALUE",
+                        Message = "Оценка должна быть от 0 до 100"
+                    });
+                }
+
+                // Обновление оценки
+                var result = await _assignmentService.UpdateGradeAsync(assignmentId, request);
+
+                return Ok(new ApiResponse<GradeUpdateResponse>
+                {
+                    Success = true,
+                    Data = result
+                });
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = ex.ErrorCode,
+                    Message = ex.Message
+                });
+            }
+            catch (System.Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при обновлении оценки для задания {AssignmentId}", assignmentId);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = "INTERNAL_SERVER_ERROR",
+                    Message = "Внутренняя ошибка сервера"
+                });
+            }
+        }
+    }
 }
 ```
 
-### **Контроллер на стороне колледжа (Python Flask):**
-```python
-from flask import Flask, jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
-import logging
+### **3. ScheduleController.cs**
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
 
-app = Flask(__name__)
+namespace CollegeSystem.API.Controllers
+{
+    [ApiController]
+    [Route("api/v1/[controller]")]
+    public class ScheduleController : ControllerBase
+    {
+        private readonly IScheduleService _scheduleService;
+        private readonly IAuthorizationService _authService;
+        private readonly ILogger<ScheduleController> _logger;
 
-class CollegeStudentsController:
-    
-    @app.route('/api/v1/groups/<string:group_id>/students', methods=['GET'])
-    @jwt_required()
-    def get_group_students(group_id):
-        """
-        Получение списка студентов группы
-        """
-        try:
-            # Проверка прав доступа
-            user = get_jwt_identity()
-            if not has_access_to_group(user, group_id):
-                return jsonify({
-                    "status": "error",
-                    "message": "Доступ запрещен",
-                    "code": "ACCESS_DENIED"
-                }), 403
-            
-            # Получение данных из БД колледжа
-            students = get_students_from_database(group_id)
-            
-            if not students:
-                return jsonify({
-                    "status": "error",
-                    "message": "Группа не найдена",
-                    "code": "GROUP_NOT_FOUND"
-                }), 404
-            
-            # Формирование ответа
-            response = {
-                "status": "success",
-                "data": {
-                    "group_id": group_id,
-                    "group_name": students[0]['group_name'] if students else "",
-                    "students": [
+        public ScheduleController(
+            IScheduleService scheduleService,
+            IAuthorizationService authService,
+            ILogger<ScheduleController> logger)
+        {
+            _scheduleService = scheduleService;
+            _authService = authService;
+            _logger = logger;
+        }
+
+        [HttpGet("groups/{groupId}/schedule")]
+        public async Task<IActionResult> GetGroupSchedule(string groupId, [FromQuery] string week = null)
+        {
+            try
+            {
+                // Проверка авторизации
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (!await _authService.ValidateTokenAsync(token))
+                {
+                    return Unauthorized(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "UNAUTHORIZED",
+                        Message = "Требуется авторизация"
+                    });
+                }
+
+                // Валидация даты (если указана)
+                if (!string.IsNullOrEmpty(week))
+                {
+                    var (isValid, errorMessage) = _scheduleService.ValidateDate(week);
+                    if (!isValid)
+                    {
+                        return BadRequest(new ApiResponse<object>
                         {
-                            "student_id": s['student_id'],
-                            "last_name": s['last_name'],
-                            "first_name": s['first_name'],
-                            "middle_name": s['middle_name'],
-                            "email": s['email'],
-                            "phone": s['phone'],
-                            "status": s['status'],
-                            "enrollment_date": s['enrollment_date'].isoformat()
-                        }
-                        for s in students
-                    ],
-                    "total": len(students),
-                    "curator": get_group_curator(group_id)
+                            Success = false,
+                            ErrorCode = "INVALID_DATE_FORMAT",
+                            Message = errorMessage
+                        });
+                    }
                 }
-            }
-            
-            return jsonify(response), 200
-            
-        except Exception as e:
-            logging.error(f"Error in get_group_students: {str(e)}")
-            return jsonify({
-                "status": "error",
-                "message": "Внутренняя ошибка сервера",
-                "code": "INTERNAL_SERVER_ERROR"
-            }), 500
-    
-    def has_access_to_group(user, group_id):
-        """Проверка прав доступа пользователя к группе"""
-        # Реализация проверки прав
-        return True
-    
-    def get_students_from_database(group_id):
-        """Получение студентов из БД колледжа"""
-        # Заглушка для примера
-        return [
-            {
-                'student_id': 'ST2021001',
-                'last_name': 'Иванов',
-                'first_name': 'Иван',
-                'middle_name': 'Иванович',
-                'email': 'ivanov@college.ru',
-                'phone': '+79991234567',
-                'status': 'active',
-                'enrollment_date': '2021-09-01',
-                'group_name': 'Информационные технологии 2021'
-            }
-        ]
-    
-    def get_group_curator(group_id):
-        """Получение куратора группы"""
-        return {
-            'teacher_id': 'TC2020001',
-            'last_name': 'Сидоров',
-            'first_name': 'Алексей'
-        }
-```
 
-### **Юнит-тесты:**
-```python
-import unittest
-import json
-from flask_testing import TestCase
-from app import app
-
-class TestStudentsAPI(TestCase):
-    
-    def create_app(self):
-        app.config['TESTING'] = True
-        app.config['JWT_SECRET_KEY'] = 'test-secret-key'
-        return app
-    
-    def setUp(self):
-        self.client = app.test_client()
-        self.valid_token = 'valid-test-token'
-    
-    def test_get_group_students_success(self):
-        """Тест успешного получения списка студентов"""
-        headers = {
-            'Authorization': f'Bearer {self.valid_token}',
-            'Content-Type': 'application/json'
-        }
-        
-        response = self.client.get(
-            '/api/v1/groups/IT-21-1/students',
-            headers=headers
-        )
-        
-        self.assertEqual(response.status_code, 200)
-        data = json.loads(response.data)
-        
-        self.assertEqual(data['status'], 'success')
-        self.assertIn('students', data['data'])
-        self.assertIsInstance(data['data']['students'], list)
-        self.assertGreater(len(data['data']['students']), 0)
-    
-    def test_get_group_students_not_found(self):
-        """Тест запроса несуществующей группы"""
-        headers = {
-            'Authorization': f'Bearer {self.valid_token}',
-            'Content-Type': 'application/json'
-        }
-        
-        response = self.client.get(
-            '/api/v1/groups/NONEXISTENT/students',
-            headers=headers
-        )
-        
-        self.assertEqual(response.status_code, 404)
-        data = json.loads(response.data)
-        self.assertEqual(data['code'], 'GROUP_NOT_FOUND')
-    
-    def test_get_group_students_unauthorized(self):
-        """Тест запроса без авторизации"""
-        response = self.client.get('/api/v1/groups/IT-21-1/students')
-        
-        self.assertEqual(response.status_code, 401)
-    
-    def test_get_group_students_invalid_token(self):
-        """Тест запроса с невалидным токеном"""
-        headers = {
-            'Authorization': 'Bearer invalid-token',
-            'Content-Type': 'application/json'
-        }
-        
-        response = self.client.get(
-            '/api/v1/groups/IT-21-1/students',
-            headers=headers
-        )
-        
-        self.assertEqual(response.status_code, 401)
-
-if __name__ == '__main__':
-    unittest.main()
-```
-
----
-
-## **2. API: Получение расписания группы**
-
-### **Информация об API:**
-- **Название:** Schedule API
-- **Путь:** `/api/v1/groups/{group_id}/schedule`
-- **Описание:** Получение расписания занятий группы
-
-### **Запрос:**
-```
-GET /api/v1/groups/IT-21-1/schedule?week=2024-12-09
-Headers:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-Query Parameters:
-  week: Дата любой день недели (формат: YYYY-MM-DD)
-```
-
-### **Ответ (200 OK):**
-```json
-{
-  "status": "success",
-  "data": {
-    "group_id": "IT-21-1",
-    "week_start": "2024-12-09",
-    "week_end": "2024-12-15",
-    "schedule": {
-      "monday": [
-        {
-          "lesson_id": "LES001",
-          "time": "09:00-10:30",
-          "subject": "Программирование",
-          "teacher": "Сидоров А.А.",
-          "room": "А-301",
-          "type": "lecture"
-        }
-      ],
-      "tuesday": [
-        {
-          "lesson_id": "LES002",
-          "time": "10:40-12:10",
-          "subject": "Базы данных",
-          "teacher": "Петрова М.С.",
-          "room": "Б-205",
-          "type": "practice"
-        }
-      ]
-    }
-  }
-}
-```
-
-### **Контроллер:**
-```python
-class CollegeScheduleController:
-    
-    @app.route('/api/v1/groups/<string:group_id>/schedule', methods=['GET'])
-    @jwt_required()
-    def get_group_schedule(group_id):
-        """
-        Получение расписания группы
-        """
-        try:
-            week_date = request.args.get('week')
-            
-            # Валидация параметров
-            if week_date:
-                try:
-                    datetime.strptime(week_date, '%Y-%m-%d')
-                except ValueError:
-                    return jsonify({
-                        "status": "error",
-                        "message": "Неверный формат даты. Используйте YYYY-MM-DD",
-                        "code": "INVALID_DATE_FORMAT"
-                    }), 400
-            
-            # Получение расписания
-            schedule_data = get_schedule_from_database(group_id, week_date)
-            
-            if not schedule_data:
-                return jsonify({
-                    "status": "error",
-                    "message": "Расписание не найдено",
-                    "code": "SCHEDULE_NOT_FOUND"
-                }), 404
-            
-            return jsonify({
-                "status": "success",
-                "data": schedule_data
-            }), 200
-            
-        except Exception as e:
-            logging.error(f"Error in get_group_schedule: {str(e)}")
-            return jsonify({
-                "status": "error",
-                "message": "Внутренняя ошибка сервера",
-                "code": "INTERNAL_SERVER_ERROR"
-            }), 500
-```
-
----
-
-## **3. API: Создание нового задания в журнале успеваемости**
-
-### **Информация об API:**
-- **Название:** Create Assignment API
-- **Путь:** `/api/v1/assignments`
-- **Описание:** Создание нового задания в системе колледжа
-
-### **Запрос:**
-```
-POST /api/v1/assignments
-Headers:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-
-Body:
-{
-  "subject_id": "SUB001",
-  "teacher_id": "TC2020001",
-  "group_ids": ["IT-21-1", "IT-21-2"],
-  "title": "Лабораторная работа №3",
-  "description": "Реализация алгоритма сортировки",
-  "deadline": "2024-12-20T23:59:59",
-  "max_points": 100,
-  "assignment_type": "lab_work"
-}
-```
-
-### **Ответ (201 Created):**
-```json
-{
-  "status": "success",
-  "data": {
-    "assignment_id": "ASG20241215001",
-    "subject_id": "SUB001",
-    "teacher_id": "TC2020001",
-    "groups": ["IT-21-1", "IT-21-2"],
-    "title": "Лабораторная работа №3",
-    "deadline": "2024-12-20T23:59:59",
-    "max_points": 100,
-    "created_at": "2024-12-15T10:30:00",
-    "status": "active"
-  }
-}
-```
-
-### **Контроллер:**
-```python
-class CollegeAssignmentsController:
-    
-    @app.route('/api/v1/assignments', methods=['POST'])
-    @jwt_required()
-    def create_assignment():
-        """
-        Создание нового задания
-        """
-        try:
-            data = request.get_json()
-            
-            # Валидация данных
-            required_fields = ['subject_id', 'teacher_id', 'group_ids', 'title', 'deadline']
-            for field in required_fields:
-                if field not in data:
-                    return jsonify({
-                        "status": "error",
-                        "message": f"Отсутствует обязательное поле: {field}",
-                        "code": "MISSING_REQUIRED_FIELD"
-                    }), 400
-            
-            # Проверка существования предмета и преподавателя
-            if not validate_subject_teacher(data['subject_id'], data['teacher_id']):
-                return jsonify({
-                    "status": "error",
-                    "message": "Предмет или преподаватель не найдены",
-                    "code": "SUBJECT_TEACHER_NOT_FOUND"
-                }), 404
-            
-            # Создание задания в БД
-            assignment_id = create_assignment_in_database(data)
-            
-            return jsonify({
-                "status": "success",
-                "data": {
-                    "assignment_id": assignment_id,
-                    **data,
-                    "created_at": datetime.now().isoformat(),
-                    "status": "active"
+                // Получение расписания
+                var schedule = await _scheduleService.GetGroupScheduleAsync(groupId, week);
+                if (schedule == null)
+                {
+                    return NotFound(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "SCHEDULE_NOT_FOUND",
+                        Message = "Расписание не найдено"
+                    });
                 }
-            }), 201
-            
-        except Exception as e:
-            logging.error(f"Error in create_assignment: {str(e)}")
-            return jsonify({
-                "status": "error",
-                "message": "Внутренняя ошибка сервера",
-                "code": "INTERNAL_SERVER_ERROR"
-            }), 500
-```
 
----
-
-## **4. API: Получение успеваемости студента**
-
-### **Информация об API:**
-- **Название:** Student Performance API
-- **Путь:** `/api/v1/students/{student_id}/performance`
-- **Описание:** Получение успеваемости студента по предметам
-
-### **Запрос:**
-```
-GET /api/v1/students/ST2021001/performance?semester=1&academic_year=2024-2025
-Headers:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-```
-
-### **Ответ (200 OK):**
-```json
-{
-  "status": "success",
-  "data": {
-    "student_id": "ST2021001",
-    "student_name": "Иванов Иван Иванович",
-    "academic_year": "2024-2025",
-    "semester": 1,
-    "performance": [
-      {
-        "subject_id": "SUB001",
-        "subject_name": "Программирование",
-        "teacher": "Сидоров А.А.",
-        "total_assignments": 10,
-        "completed_assignments": 8,
-        "average_score": 85.5,
-        "final_grade": 4,
-        "last_activity": "2024-12-10T14:30:00"
-      },
-      {
-        "subject_id": "SUB002",
-        "subject_name": "Базы данных",
-        "teacher": "Петрова М.С.",
-        "total_assignments": 8,
-        "completed_assignments": 6,
-        "average_score": 78.2,
-        "final_grade": 3,
-        "last_activity": "2024-12-08T10:15:00"
-      }
-    ],
-    "summary": {
-      "gpa": 3.5,
-      "total_subjects": 6,
-      "completed_subjects": 4,
-      "attendance_rate": 92.5
-    }
-  }
-}
-```
-
----
-
-## **5. API: Обновление оценки за задание**
-
-### **Информация об API:**
-- **Название:** Update Grade API
-- **Путь:** `/api/v1/assignments/{assignment_id}/grades`
-- **Описание:** Обновление оценки студента за задание
-
-### **Запрос:**
-```
-PUT /api/v1/assignments/ASG20241215001/grades
-Headers:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-
-Body:
-{
-  "student_id": "ST2021001",
-  "grade": 95,
-  "teacher_comment": "Отличная работа, все требования выполнены",
-  "graded_by": "TC2020001"
-}
-```
-
-### **Ответ (200 OK):**
-```json
-{
-  "status": "success",
-  "data": {
-    "assignment_id": "ASG20241215001",
-    "student_id": "ST2021001",
-    "grade": 95,
-    "previous_grade": null,
-    "graded_at": "2024-12-15T14:20:00",
-    "graded_by": "TC2020001",
-    "status": "graded"
-  }
-}
-```
-
----
-
-## **6. API: Получение списка предметов преподавателя**
-
-### **Информация об API:**
-- **Название:** Teacher Subjects API
-- **Путь:** `/api/v1/teachers/{teacher_id}/subjects`
-- **Описание:** Получение списка предметов, которые ведет преподаватель
-
-### **Запрос:**
-```
-GET /api/v1/teachers/TC2020001/subjects?academic_year=2024-2025
-Headers:
-  Authorization: Bearer {token}
-```
-
-### **Ответ (200 OK):**
-```json
-{
-  "status": "success",
-  "data": {
-    "teacher_id": "TC2020001",
-    "teacher_name": "Сидоров Алексей Алексеевич",
-    "academic_year": "2024-2025",
-    "subjects": [
-      {
-        "subject_id": "SUB001",
-        "subject_name": "Программирование",
-        "subject_code": "PRG101",
-        "groups": ["IT-21-1", "IT-21-2", "IT-22-1"],
-        "total_students": 75,
-        "hours_per_week": 6,
-        "semester": 1
-      },
-      {
-        "subject_id": "SUB003",
-        "subject_name": "Алгоритмы и структуры данных",
-        "subject_code": "ALG201",
-        "groups": ["IT-21-1"],
-        "total_students": 25,
-        "hours_per_week": 4,
-        "semester": 2
-      }
-    ]
-  }
-}
-```
-
----
-
-## **7. API: Отметка посещаемости**
-
-### **Информация об API:**
-- **Название:** Attendance API
-- **Путь:** `/api/v1/attendance`
-- **Описание:** Отметка посещаемости студента на занятии
-
-### **Запрос:**
-```
-POST /api/v1/attendance
-Headers:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-
-Body:
-{
-  "lesson_id": "LES001",
-  "student_id": "ST2021001",
-  "attendance_date": "2024-12-15",
-  "status": "present",
-  "marked_by": "TC2020001",
-  "notes": "Присутствовал все занятие"
-}
-```
-
-### **Ответ (201 Created):**
-```json
-{
-  "status": "success",
-  "data": {
-    "attendance_id": "ATT20241215001",
-    "lesson_id": "LES001",
-    "student_id": "ST2021001",
-    "attendance_date": "2024-12-15",
-    "status": "present",
-    "marked_at": "2024-12-15T09:05:00",
-    "marked_by": "TC2020001"
-  }
-}
-```
-
----
-
-## **8. API: Получение статистики по группе**
-
-### **Информация об API:**
-- **Название:** Group Statistics API
-- **Путь:** `/api/v1/groups/{group_id}/statistics`
-- **Описание:** Получение статистических данных по группе
-
-### **Запрос:**
-```
-GET /api/v1/groups/IT-21-1/statistics?period=month&start_date=2024-12-01&end_date=2024-12-31
-Headers:
-  Authorization: Bearer {token}
-```
-
-### **Ответ (200 OK):**
-```json
-{
-  "status": "success",
-  "data": {
-    "group_id": "IT-21-1",
-    "period": {
-      "start": "2024-12-01",
-      "end": "2024-12-31"
-    },
-    "statistics": {
-      "attendance": {
-        "total_lessons": 48,
-        "average_attendance": 89.5,
-        "best_attendance_student": "ST2021001",
-        "worst_attendance_student": "ST2021005"
-      },
-      "performance": {
-        "average_gpa": 3.8,
-        "best_student": "ST2021001",
-        "worst_student": "ST2021005",
-        "distribution": {
-          "excellent": 8,
-          "good": 12,
-          "satisfactory": 4,
-          "unsatisfactory": 1
-        }
-      },
-      "assignments": {
-        "total_assigned": 25,
-        "average_completion_rate": 92.3,
-        "average_score": 82.7
-      }
-    },
-    "trends": {
-      "attendance_trend": "up",
-      "performance_trend": "stable",
-      "completion_rate_trend": "up"
-    }
-  }
-}
-```
-
----
-
-## **Общий контроллер с обработкой ошибок:**
-
-```python
-class CollegeAPIController:
-    """
-    Основной контроллер API системы колледжа
-    """
-    
-    @app.errorhandler(404)
-    def not_found(error):
-        return jsonify({
-            "status": "error",
-            "message": "Ресурс не найден",
-            "code": "RESOURCE_NOT_FOUND"
-        }), 404
-    
-    @app.errorhandler(400)
-    def bad_request(error):
-        return jsonify({
-            "status": "error",
-            "message": "Некорректный запрос",
-            "code": "BAD_REQUEST"
-        }), 400
-    
-    @app.errorhandler(401)
-    def unauthorized(error):
-        return jsonify({
-            "status": "error",
-            "message": "Требуется авторизация",
-            "code": "UNAUTHORIZED"
-        }), 401
-    
-    @app.errorhandler(403)
-    def forbidden(error):
-        return jsonify({
-            "status": "error",
-            "message": "Доступ запрещен",
-            "code": "FORBIDDEN"
-        }), 403
-    
-    @app.errorhandler(500)
-    def internal_error(error):
-        return jsonify({
-            "status": "error",
-            "message": "Внутренняя ошибка сервера",
-            "code": "INTERNAL_SERVER_ERROR"
-        }), 500
-```
-
----
-
-## **Юнит-тесты для всех API:**
-
-```python
-import unittest
-import json
-from datetime import datetime
-from flask_testing import TestCase
-from app import app
-
-class TestCollegeAPIs(TestCase):
-    
-    def create_app(self):
-        app.config['TESTING'] = True
-        app.config['JWT_SECRET_KEY'] = 'test-secret-key'
-        return app
-    
-    def setUp(self):
-        self.client = app.test_client()
-        self.valid_token = 'valid-test-token'
-        self.headers = {
-            'Authorization': f'Bearer {self.valid_token}',
-            'Content-Type': 'application/json'
-        }
-    
-    def test_all_apis_require_auth(self):
-        """Проверка, что все API требуют авторизацию"""
-        endpoints = [
-            ('/api/v1/groups/IT-21-1/students', 'GET'),
-            ('/api/v1/assignments', 'POST'),
-            ('/api/v1/students/ST2021001/performance', 'GET'),
-        ]
-        
-        for endpoint, method in endpoints:
-            if method == 'GET':
-                response = self.client.get(endpoint)
-            elif method == 'POST':
-                response = self.client.post(endpoint)
-            
-            self.assertEqual(response.status_code, 401)
-    
-    def test_create_assignment_validation(self):
-        """Тест валидации при создании задания"""
-        # Тест без обязательных полей
-        invalid_data = {
-            "title": "Тестовое задание"
-            # Нет subject_id, teacher_id и других обязательных полей
-        }
-        
-        response = self.client.post(
-            '/api/v1/assignments',
-            headers=self.headers,
-            data=json.dumps(invalid_data)
-        )
-        
-        self.assertEqual(response.status_code, 400)
-        data = json.loads(response.data)
-        self.assertEqual(data['code'], 'MISSING_REQUIRED_FIELD')
-    
-    def test_performance_api_with_filters(self):
-        """Тест API успеваемости с фильтрами"""
-        # Тест с валидными параметрами
-        response = self.client.get(
-            '/api/v1/students/ST2021001/performance?semester=1&academic_year=2024-2025',
-            headers=self.headers
-        )
-        
-        self.assertEqual(response.status_code, 200)
-        data = json.loads(response.data)
-        
-        # Проверка структуры ответа
-        self.assertIn('performance', data['data'])
-        self.assertIn('summary', data['data'])
-        self.assertEqual(data['data']['student_id'], 'ST2021001')
-    
-    def test_update_grade_scenarios(self):
-        """Тест различных сценариев обновления оценки"""
-        test_cases = [
-            {
-                "name": "Валидное обновление",
-                "data": {
-                    "student_id": "ST2021001",
-                    "grade": 95,
-                    "teacher_comment": "Хорошая работа",
-                    "graded_by": "TC2020001"
-                },
-                "expected_status": 200
-            },
-            {
-                "name": "Оценка вне диапазона",
-                "data": {
-                    "student_id": "ST2021001",
-                    "grade": 150,  # Некорректная оценка
-                    "teacher_comment": "Тест",
-                    "graded_by": "TC2020001"
-                },
-                "expected_status": 400
+                return Ok(new ApiResponse<ScheduleResponse>
+                {
+                    Success = true,
+                    Data = schedule
+                });
             }
-        ]
-        
-        for test_case in test_cases:
-            with self.subTest(test_case['name']):
-                response = self.client.put(
-                    '/api/v1/assignments/ASG001/grades',
-                    headers=self.headers,
-                    data=json.dumps(test_case['data'])
-                )
-                
-                self.assertEqual(response.status_code, test_case['expected_status'])
-    
-    def test_schedule_api_date_validation(self):
-        """Тест валидации даты в API расписания"""
-        # Тест с невалидной датой
-        response = self.client.get(
-            '/api/v1/groups/IT-21-1/schedule?week=invalid-date',
-            headers=self.headers
-        )
-        
-        self.assertEqual(response.status_code, 400)
-        data = json.loads(response.data)
-        self.assertEqual(data['code'], 'INVALID_DATE_FORMAT')
-        
-        # Тест с валидной датой
-        response = self.client.get(
-            '/api/v1/groups/IT-21-1/schedule?week=2024-12-09',
-            headers=self.headers
-        )
-        
-        self.assertEqual(response.status_code, 200)
-    
-    def test_teacher_subjects_api(self):
-        """Тест API предметов преподавателя"""
-        response = self.client.get(
-            '/api/v1/teachers/TC2020001/subjects',
-            headers=self.headers
-        )
-        
-        self.assertEqual(response.status_code, 200)
-        data = json.loads(response.data)
-        
-        # Проверка структуры ответа
-        self.assertEqual(data['data']['teacher_id'], 'TC2020001')
-        self.assertIsInstance(data['data']['subjects'], list)
-        
-        if data['data']['subjects']:
-            subject = data['data']['subjects'][0]
-            self.assertIn('subject_id', subject)
-            self.assertIn('subject_name', subject)
-            self.assertIn('groups', subject)
-    
-    def test_attendance_api_scenarios(self):
-        """Тест различных сценариев отметки посещаемости"""
-        valid_attendance = {
-            "lesson_id": "LES001",
-            "student_id": "ST2021001",
-            "attendance_date": "2024-12-15",
-            "status": "present",
-            "marked_by": "TC2020001"
+            catch (System.Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при получении расписания группы {GroupId}", groupId);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = "INTERNAL_SERVER_ERROR",
+                    Message = "Внутренняя ошибка сервера"
+                });
+            }
         }
-        
-        # Тест успешного создания
-        response = self.client.post(
-            '/api/v1/attendance',
-            headers=self.headers,
-            data=json.dumps(valid_attendance)
-        )
-        
-        self.assertEqual(response.status_code, 201)
-        data = json.loads(response.data)
-        self.assertEqual(data['data']['status'], 'present')
-        
-        # Тест с невалидным статусом
-        invalid_attendance = valid_attendance.copy()
-        invalid_attendance['status'] = 'invalid_status'
-        
-        response = self.client.post(
-            '/api/v1/attendance',
-            headers=self.headers,
-            data=json.dumps(invalid_attendance)
-        )
-        
-        self.assertEqual(response.status_code, 400)
-    
-    def test_group_statistics_api(self):
-        """Тест API статистики группы"""
-        # Тест с параметрами периода
-        response = self.client.get(
-            '/api/v1/groups/IT-21-1/statistics?period=month&start_date=2024-12-01&end_date=2024-12-31',
-            headers=self.headers
-        )
-        
-        self.assertEqual(response.status_code, 200)
-        data = json.loads(response.data)
-        
-        # Проверка структуры ответа
-        self.assertIn('statistics', data['data'])
-        self.assertIn('attendance', data['data']['statistics'])
-        self.assertIn('performance', data['data']['statistics'])
-        self.assertIn('assignments', data['data']['statistics'])
-        self.assertIn('trends', data['data'])
-
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
-```
-
----
-
-## **Документация по использованию API:**
-
-### **Аутентификация:**
-Все API требуют Bearer токен в заголовке Authorization:
-```
-Authorization: Bearer {your_jwt_token}
-```
-
-### **Коды ошибок:**
-- `GROUP_NOT_FOUND` - Группа не найдена
-- `STUDENT_NOT_FOUND` - Студент не найден
-- `TEACHER_NOT_FOUND` - Преподаватель не найден
-- `SUBJECT_NOT_FOUND` - Предмет не найден
-- `ASSIGNMENT_NOT_FOUND` - Задание не найдено
-- `LESSON_NOT_FOUND` - Занятие не найдено
-- `ACCESS_DENIED` - Доступ запрещен
-- `INVALID_DATE_FORMAT` - Неверный формат даты
-- `MISSING_REQUIRED_FIELD` - Отсутствует обязательное поле
-- `INVALID_GRADE_VALUE` - Некорректное значение оценки
-- `DUPLICATE_RECORD` - Дублирующаяся запись
-- `INTERNAL_SERVER_ERROR` - Внутренняя ошибка сервера
-
-### **Форматы данных:**
-- **Даты:** YYYY-MM-DD
-- **Дата-время:** ISO 8601 (YYYY-MM-DDTHH:MM:SS)
-- **Оценки:** Число от 0 до 100
-- **Идентификаторы:** Строка, уникальная в рамках системы
-
-### **Пагинация (где применимо):**
-```json
-{
-  "page": 1,
-  "per_page": 20,
-  "total": 100,
-  "total_pages": 5
+    }
 }
 ```
 
-### **Сортировка (где применимо):**
+### **4. PerformanceController.cs**
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+
+namespace CollegeSystem.API.Controllers
+{
+    [ApiController]
+    [Route("api/v1/[controller]")]
+    public class PerformanceController : ControllerBase
+    {
+        private readonly IPerformanceService _performanceService;
+        private readonly IAuthorizationService _authService;
+        private readonly ILogger<PerformanceController> _logger;
+
+        public PerformanceController(
+            IPerformanceService performanceService,
+            IAuthorizationService authService,
+            ILogger<PerformanceController> logger)
+        {
+            _performanceService = performanceService;
+            _authService = authService;
+            _logger = logger;
+        }
+
+        [HttpGet("students/{studentId}/performance")]
+        public async Task<IActionResult> GetStudentPerformance(
+            string studentId,
+            [FromQuery] int? semester = null,
+            [FromQuery] string academicYear = null)
+        {
+            try
+            {
+                // Проверка авторизации
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (!await _authService.ValidateTokenAsync(token))
+                {
+                    return Unauthorized(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "UNAUTHORIZED",
+                        Message = "Требуется авторизация"
+                    });
+                }
+
+                // Проверка доступа к данным студента
+                if (!await _authService.HasAccessToStudentAsync(token, studentId))
+                {
+                    return StatusCode(403, new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "ACCESS_DENIED",
+                        Message = "Доступ запрещен"
+                    });
+                }
+
+                // Валидация семестра
+                if (semester.HasValue && (semester.Value < 1 || semester.Value > 2))
+                {
+                    return BadRequest(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "INVALID_SEMESTER",
+                        Message = "Семестр должен быть 1 или 2"
+                    });
+                }
+
+                // Получение успеваемости
+                var performance = await _performanceService.GetStudentPerformanceAsync(
+                    studentId, semester, academicYear);
+
+                if (performance == null)
+                {
+                    return NotFound(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "STUDENT_NOT_FOUND",
+                        Message = "Студент не найден"
+                    });
+                }
+
+                return Ok(new ApiResponse<StudentPerformanceResponse>
+                {
+                    Success = true,
+                    Data = performance
+                });
+            }
+            catch (System.Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при получении успеваемости студента {StudentId}", studentId);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = "INTERNAL_SERVER_ERROR",
+                    Message = "Внутренняя ошибка сервера"
+                });
+            }
+        }
+    }
+}
 ```
-?sort=last_name&order=asc
+
+### **7. StatisticsController.cs**
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+
+namespace CollegeSystem.API.Controllers
+{
+    [ApiController]
+    [Route("api/v1/[controller]")]
+    public class StatisticsController : ControllerBase
+    {
+        private readonly IStatisticsService _statisticsService;
+        private readonly IAuthorizationService _authService;
+        private readonly ILogger<StatisticsController> _logger;
+
+        public StatisticsController(
+            IStatisticsService statisticsService,
+            IAuthorizationService authService,
+            ILogger<StatisticsController> logger)
+        {
+            _statisticsService = statisticsService;
+            _authService = authService;
+            _logger = logger;
+        }
+
+        [HttpGet("groups/{groupId}/statistics")]
+        public async Task<IActionResult> GetGroupStatistics(
+            string groupId,
+            [FromQuery] string period = null,
+            [FromQuery] string startDate = null,
+            [FromQuery] string endDate = null)
+        {
+            try
+            {
+                // Проверка авторизации
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (!await _authService.ValidateTokenAsync(token))
+                {
+                    return Unauthorized(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "UNAUTHORIZED",
+                        Message = "Требуется авторизация"
+                    });
+                }
+
+                // Проверка доступа к статистике группы
+                if (!await _authService.HasAccessToGroupStatisticsAsync(token, groupId))
+                {
+                    return StatusCode(403, new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "ACCESS_DENIED",
+                        Message = "Доступ к статистике запрещен"
+                    });
+                }
+
+                // Валидация периода
+                if (!string.IsNullOrEmpty(period))
+                {
+                    var validPeriods = new[] { "week", "month", "semester" };
+                    if (!validPeriods.Contains(period))
+                    {
+                        return BadRequest(new ApiResponse<object>
+                        {
+                            Success = false,
+                            ErrorCode = "INVALID_PERIOD",
+                            Message = "Период должен быть: week, month или semester"
+                        });
+                    }
+                }
+
+                // Получение статистики
+                var statistics = await _statisticsService.GetGroupStatisticsAsync(
+                    groupId, period, startDate, endDate);
+
+                if (statistics == null)
+                {
+                    return NotFound(new ApiResponse<object>
+                    {
+                        Success = false,
+                        ErrorCode = "GROUP_NOT_FOUND",
+                        Message = "Группа не найдена"
+                    });
+                }
+
+                return Ok(new ApiResponse<GroupStatisticsResponse>
+                {
+                    Success = true,
+                    Data = statistics
+                });
+            }
+            catch (System.Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при получении статистики группы {GroupId}", groupId);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    ErrorCode = "INTERNAL_SERVER_ERROR",
+                    Message = "Внутренняя ошибка сервера"
+                });
+            }
+        }
+    }
+}
 ```
 
----
+## **ЮНИТ-ТЕСТЫ (xUnit + Moq + FluentAssertions):**
 
-## **Интеграционные сценарии:**
+### **1. Создание тестового проекта:**
+1. В Solution Explorer: правой кнопкой на Solution → **Добавить → Новый проект**
+2. Выберите: **xUnit Test Project**
+3. Название: `CollegeSystem.API.Tests`
+4. Добавьте NuGet пакеты:
+   ```
+   Install-Package Moq
+   Install-Package FluentAssertions
+   Install-Package Microsoft.AspNetCore.Mvc.Testing
+   Install-Package Microsoft.NET.Test.Sdk
+   ```
 
-### **Сценарий 1: Создание задания в системе TaskFlow**
-1. TaskFlow вызывает `POST /api/v1/assignments`
-2. Колледж создает задание и возвращает ID
-3. TaskFlow сохраняет ID задания для дальнейшей синхронизации
+### **2. StudentsControllerTests.cs**
+```csharp
+using Xunit;
+using Moq;
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using CollegeSystem.API.Controllers;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
 
-### **Сценарий 2: Синхронизация оценок**
-1. Преподаватель выставляет оценку в TaskFlow
-2. TaskFlow вызывает `PUT /api/v1/assignments/{id}/grades`
-3. Колледж обновляет оценку в журнале успеваемости
+namespace CollegeSystem.API.Tests.Controllers
+{
+    public class StudentsControllerTests
+    {
+        private readonly Mock<IStudentService> _mockStudentService;
+        private readonly Mock<IAuthorizationService> _mockAuthService;
+        private readonly Mock<ILogger<StudentsController>> _mockLogger;
+        private readonly StudentsController _controller;
 
-### **Сценарий 3: Ежедневная синхронизация данных**
-1. TaskFlow загружает список студентов через `GET /api/v1/groups/{id}/students`
-2. Загружает расписание через `GET /api/v1/groups/{id}/schedule`
-3. Обновляет успеваемость через `GET /api/v1/students/{id}/performance`
+        public StudentsControllerTests()
+        {
+            _mockStudentService = new Mock<IStudentService>();
+            _mockAuthService = new Mock<IAuthorizationService>();
+            _mockLogger = new Mock<ILogger<StudentsController>>();
+            
+            _controller = new StudentsController(
+                _mockStudentService.Object,
+                _mockAuthService.Object,
+                _mockLogger.Object);
+        }
 
-### **Сценарий 4: Отчетность для куратора**
-1. TaskFlow запрашивает статистику через `GET /api/v1/groups/{id}/statistics`
-2. Формирует расширенный отчет на основе данных колледжа
-3. Предоставляет куратору комплексную аналитику
+        [Fact]
+        public async Task GetGroupStudents_ValidRequest_ReturnsOkWithStudents()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            var students = new List<StudentDto>
+            {
+                new StudentDto { StudentId = "ST001", FirstName = "Иван", LastName = "Иванов" }
+            };
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+            _mockStudentService.Setup(x => x.GetStudentsByGroupAsync(groupId))
+                .ReturnsAsync(students);
+            _mockStudentService.Setup(x => x.GetGroupCuratorAsync(groupId))
+                .ReturnsAsync(new CuratorDto());
 
----
+            // Act
+            var result = await _controller.GetGroupStudents(groupId);
 
-Эта система API обеспечивает полную интеграцию TaskFlow с существующей инфраструктурой колледжа, позволяя синхронизировать данные в реальном времени и избегать дублирования информации.
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+            var okResult = result as OkObjectResult;
+            okResult.Value.Should().BeOfType<ApiResponse<GroupStudentsResponse>>();
+            
+            var response = okResult.Value as ApiResponse<GroupStudentsResponse>;
+            response.Success.Should().BeTrue();
+            response.Data.Students.Should().HaveCount(1);
+            response.Data.GroupId.Should().Be(groupId);
+        }
+
+        [Fact]
+        public async Task GetGroupStudents_InvalidToken_ReturnsUnauthorized()
+        {
+            // Arrange
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(false);
+
+            // Act
+            var result = await _controller.GetGroupStudents("IT-21-1");
+
+            // Assert
+            result.Should().BeOfType<UnauthorizedObjectResult>();
+            var unauthorizedResult = result as UnauthorizedObjectResult;
+            unauthorizedResult.Value.Should().BeOfType<ApiResponse<object>>();
+            
+            var response = unauthorizedResult.Value as ApiResponse<object>;
+            response.Success.Should().BeFalse();
+            response.ErrorCode.Should().Be("UNAUTHORIZED");
+        }
+
+        [Fact]
+        public async Task GetGroupStudents_NoAccessToGroup_ReturnsForbidden()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(false);
+
+            // Act
+            var result = await _controller.GetGroupStudents(groupId);
+
+            // Assert
+            result.Should().BeOfType<ObjectResult>();
+            var objectResult = result as ObjectResult;
+            objectResult.StatusCode.Should().Be(403);
+            
+            var response = objectResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("ACCESS_DENIED");
+        }
+
+        [Fact]
+        public async Task GetGroupStudents_GroupNotFound_ReturnsNotFound()
+        {
+            // Arrange
+            var groupId = "NONEXISTENT";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+            _mockStudentService.Setup(x => x.GetStudentsByGroupAsync(groupId))
+                .ReturnsAsync((List<StudentDto>)null);
+
+            // Act
+            var result = await _controller.GetGroupStudents(groupId);
+
+            // Assert
+            result.Should().BeOfType<NotFoundObjectResult>();
+            var notFoundResult = result as NotFoundObjectResult;
+            
+            var response = notFoundResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("GROUP_NOT_FOUND");
+        }
+
+        [Fact]
+        public async Task GetGroupStudents_ServiceException_ReturnsInternalServerError()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+            _mockStudentService.Setup(x => x.GetStudentsByGroupAsync(groupId))
+                .ThrowsAsync(new System.Exception("Database error"));
+
+            // Act
+            var result = await _controller.GetGroupStudents(groupId);
+
+            // Assert
+            result.Should().BeOfType<ObjectResult>();
+            var objectResult = result as ObjectResult;
+            objectResult.StatusCode.Should().Be(500);
+            
+            var response = objectResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("INTERNAL_SERVER_ERROR");
+        }
+    }
+}
+```
+
+### **3. AssignmentsControllerTests.cs**
+```csharp
+using Xunit;
+using Moq;
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using System;
+using CollegeSystem.API.Controllers;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+
+namespace CollegeSystem.API.Tests.Controllers
+{
+    public class AssignmentsControllerTests
+    {
+        private readonly Mock<IAssignmentService> _mockAssignmentService;
+        private readonly Mock<IAuthorizationService> _mockAuthService;
+        private readonly Mock<IValidationService> _mockValidationService;
+        private readonly Mock<ILogger<AssignmentsController>> _mockLogger;
+        private readonly AssignmentsController _controller;
+
+        public AssignmentsControllerTests()
+        {
+            _mockAssignmentService = new Mock<IAssignmentService>();
+            _mockAuthService = new Mock<IAuthorizationService>();
+            _mockValidationService = new Mock<IValidationService>();
+            _mockLogger = new Mock<ILogger<AssignmentsController>>();
+            
+            _controller = new AssignmentsController(
+                _mockAssignmentService.Object,
+                _mockAuthService.Object,
+                _mockValidationService.Object,
+                _mockLogger.Object);
+        }
+
+        [Fact]
+        public async Task CreateAssignment_ValidRequest_ReturnsCreated()
+        {
+            // Arrange
+            var request = new CreateAssignmentRequest
+            {
+                Title = "Test Assignment",
+                SubjectId = "SUB001",
+                TeacherId = "TC001",
+                Deadline = DateTime.Now.AddDays(7)
+            };
+            
+            var response = new AssignmentResponse
+            {
+                AssignmentId = "ASG001",
+                Title = request.Title
+            };
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.IsTeacherAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockValidationService.Setup(x => x.ValidateAssignmentRequest(request))
+                .Returns((true, null));
+            _mockAssignmentService.Setup(x => x.CreateAssignmentAsync(request))
+                .ReturnsAsync(response);
+
+            // Act
+            var result = await _controller.CreateAssignment(request);
+
+            // Assert
+            result.Should().BeOfType<CreatedAtActionResult>();
+            var createdResult = result as CreatedAtActionResult;
+            createdResult.StatusCode.Should().Be(201);
+            
+            var apiResponse = createdResult.Value as ApiResponse<AssignmentResponse>;
+            apiResponse.Success.Should().BeTrue();
+            apiResponse.Data.AssignmentId.Should().Be("ASG001");
+        }
+
+        [Fact]
+        public async Task CreateAssignment_NonTeacherUser_ReturnsForbidden()
+        {
+            // Arrange
+            var request = new CreateAssignmentRequest();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.IsTeacherAsync(It.IsAny<string>()))
+                .ReturnsAsync(false);
+
+            // Act
+            var result = await _controller.CreateAssignment(request);
+
+            // Assert
+            result.Should().BeOfType<ObjectResult>();
+            var objectResult = result as ObjectResult;
+            objectResult.StatusCode.Should().Be(403);
+            
+            var response = objectResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("FORBIDDEN");
+        }
+
+        [Fact]
+        public async Task CreateAssignment_InvalidRequest_ReturnsBadRequest()
+        {
+            // Arrange
+            var request = new CreateAssignmentRequest();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.IsTeacherAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockValidationService.Setup(x => x.ValidateAssignmentRequest(request))
+                .Returns((false, "Title is required"));
+
+            // Act
+            var result = await _controller.CreateAssignment(request);
+
+            // Assert
+            result.Should().BeOfType<BadRequestObjectResult>();
+            var badRequestResult = result as BadRequestObjectResult;
+            
+            var response = badRequestResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("INVALID_REQUEST");
+        }
+
+        [Fact]
+        public async Task UpdateGrade_ValidRequest_ReturnsOk()
+        {
+            // Arrange
+            var assignmentId = "ASG001";
+            var request = new UpdateGradeRequest
+            {
+                StudentId = "ST001",
+                Grade = 85,
+                TeacherComment = "Good work"
+            };
+            
+            var response = new GradeUpdateResponse
+            {
+                AssignmentId = assignmentId,
+                Grade = request.Grade
+            };
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.IsTeacherAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAssignmentService.Setup(x => x.UpdateGradeAsync(assignmentId, request))
+                .ReturnsAsync(response);
+
+            // Act
+            var result = await _controller.UpdateGrade(assignmentId, request);
+
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+            var okResult = result as OkObjectResult;
+            
+            var apiResponse = okResult.Value as ApiResponse<GradeUpdateResponse>;
+            apiResponse.Success.Should().BeTrue();
+            apiResponse.Data.Grade.Should().Be(85);
+        }
+
+        [Theory]
+        [InlineData(-10)]
+        [InlineData(150)]
+        public async Task UpdateGrade_InvalidGrade_ReturnsBadRequest(int invalidGrade)
+        {
+            // Arrange
+            var assignmentId = "ASG001";
+            var request = new UpdateGradeRequest
+            {
+                StudentId = "ST001",
+                Grade = invalidGrade
+            };
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.IsTeacherAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+
+            // Act
+            var result = await _controller.UpdateGrade(assignmentId, request);
+
+            // Assert
+            result.Should().BeOfType<BadRequestObjectResult>();
+            var badRequestResult = result as BadRequestObjectResult;
+            
+            var response = badRequestResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("INVALID_GRADE_VALUE");
+        }
+
+        [Fact]
+        public async Task UpdateGrade_AssignmentNotFound_ReturnsNotFound()
+        {
+            // Arrange
+            var assignmentId = "NONEXISTENT";
+            var request = new UpdateGradeRequest
+            {
+                StudentId = "ST001",
+                Grade = 85
+            };
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.IsTeacherAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAssignmentService.Setup(x => x.UpdateGradeAsync(assignmentId, request))
+                .ThrowsAsync(new NotFoundException("ASSIGNMENT_NOT_FOUND", "Assignment not found"));
+
+            // Act
+            var result = await _controller.UpdateGrade(assignmentId, request);
+
+            // Assert
+            result.Should().BeOfType<NotFoundObjectResult>();
+            var notFoundResult = result as NotFoundObjectResult;
+            
+            var response = notFoundResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("ASSIGNMENT_NOT_FOUND");
+        }
+    }
+}
+```
+
+### **4. ScheduleControllerTests.cs**
+```csharp
+using Xunit;
+using Moq;
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Controllers;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+
+namespace CollegeSystem.API.Tests.Controllers
+{
+    public class ScheduleControllerTests
+    {
+        private readonly Mock<IScheduleService> _mockScheduleService;
+        private readonly Mock<IAuthorizationService> _mockAuthService;
+        private readonly Mock<ILogger<ScheduleController>> _mockLogger;
+        private readonly ScheduleController _controller;
+
+        public ScheduleControllerTests()
+        {
+            _mockScheduleService = new Mock<IScheduleService>();
+            _mockAuthService = new Mock<IAuthorizationService>();
+            _mockLogger = new Mock<ILogger<ScheduleController>>();
+            
+            _controller = new ScheduleController(
+                _mockScheduleService.Object,
+                _mockAuthService.Object,
+                _mockLogger.Object);
+        }
+
+        [Fact]
+        public async Task GetGroupSchedule_ValidRequest_ReturnsOk()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            var week = "2024-12-09";
+            var schedule = new ScheduleResponse();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockScheduleService.Setup(x => x.ValidateDate(week))
+                .Returns((true, null));
+            _mockScheduleService.Setup(x => x.GetGroupScheduleAsync(groupId, week))
+                .ReturnsAsync(schedule);
+
+            // Act
+            var result = await _controller.GetGroupSchedule(groupId, week);
+
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+            var okResult = result as OkObjectResult;
+            
+            var response = okResult.Value as ApiResponse<ScheduleResponse>;
+            response.Success.Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task GetGroupSchedule_InvalidDateFormat_ReturnsBadRequest()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            var invalidDate = "invalid-date";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockScheduleService.Setup(x => x.ValidateDate(invalidDate))
+                .Returns((false, "Invalid date format"));
+
+            // Act
+            var result = await _controller.GetGroupSchedule(groupId, invalidDate);
+
+            // Assert
+            result.Should().BeOfType<BadRequestObjectResult>();
+            var badRequestResult = result as BadRequestObjectResult;
+            
+            var response = badRequestResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("INVALID_DATE_FORMAT");
+        }
+
+        [Fact]
+        public async Task GetGroupSchedule_ScheduleNotFound_ReturnsNotFound()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            var week = "2024-12-09";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockScheduleService.Setup(x => x.ValidateDate(week))
+                .Returns((true, null));
+            _mockScheduleService.Setup(x => x.GetGroupScheduleAsync(groupId, week))
+                .ReturnsAsync((ScheduleResponse)null);
+
+            // Act
+            var result = await _controller.GetGroupSchedule(groupId, week);
+
+            // Assert
+            result.Should().BeOfType<NotFoundObjectResult>();
+            var notFoundResult = result as NotFoundObjectResult;
+            
+            var response = notFoundResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("SCHEDULE_NOT_FOUND");
+        }
+
+        [Fact]
+        public async Task GetGroupSchedule_NoWeekDate_UsesCurrentWeek()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            string week = null;
+            var schedule = new ScheduleResponse();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockScheduleService.Setup(x => x.GetGroupScheduleAsync(groupId, week))
+                .ReturnsAsync(schedule);
+
+            // Act
+            var result = await _controller.GetGroupSchedule(groupId, week);
+
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+            _mockScheduleService.Verify(x => x.GetGroupScheduleAsync(groupId, null), Times.Once);
+        }
+    }
+}
+```
+
+### **5. PerformanceControllerTests.cs**
+```csharp
+using Xunit;
+using Moq;
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Controllers;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+
+namespace CollegeSystem.API.Tests.Controllers
+{
+    public class PerformanceControllerTests
+    {
+        private readonly Mock<IPerformanceService> _mockPerformanceService;
+        private readonly Mock<IAuthorizationService> _mockAuthService;
+        private readonly Mock<ILogger<PerformanceController>> _mockLogger;
+        private readonly PerformanceController _controller;
+
+        public PerformanceControllerTests()
+        {
+            _mockPerformanceService = new Mock<IPerformanceService>();
+            _mockAuthService = new Mock<IAuthorizationService>();
+            _mockLogger = new Mock<ILogger<PerformanceController>>();
+            
+            _controller = new PerformanceController(
+                _mockPerformanceService.Object,
+                _mockAuthService.Object,
+                _mockLogger.Object);
+        }
+
+        [Fact]
+        public async Task GetStudentPerformance_ValidRequest_ReturnsOk()
+        {
+            // Arrange
+            var studentId = "ST001";
+            var performance = new StudentPerformanceResponse();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToStudentAsync(It.IsAny<string>(), studentId))
+                .ReturnsAsync(true);
+            _mockPerformanceService.Setup(x => x.GetStudentPerformanceAsync(studentId, null, null))
+                .ReturnsAsync(performance);
+
+            // Act
+            var result = await _controller.GetStudentPerformance(studentId);
+
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+            var okResult = result as OkObjectResult;
+            
+            var response = okResult.Value as ApiResponse<StudentPerformanceResponse>;
+            response.Success.Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task GetStudentPerformance_NoAccessToStudent_ReturnsForbidden()
+        {
+            // Arrange
+            var studentId = "ST001";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToStudentAsync(It.IsAny<string>(), studentId))
+                .ReturnsAsync(false);
+
+            // Act
+            var result = await _controller.GetStudentPerformance(studentId);
+
+            // Assert
+            result.Should().BeOfType<ObjectResult>();
+            var objectResult = result as ObjectResult;
+            objectResult.StatusCode.Should().Be(403);
+            
+            var response = objectResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("ACCESS_DENIED");
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(3)]
+        public async Task GetStudentPerformance_InvalidSemester_ReturnsBadRequest(int invalidSemester)
+        {
+            // Arrange
+            var studentId = "ST001";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToStudentAsync(It.IsAny<string>(), studentId))
+                .ReturnsAsync(true);
+
+            // Act
+            var result = await _controller.GetStudentPerformance(studentId, invalidSemester);
+
+            // Assert
+            result.Should().BeOfType<BadRequestObjectResult>();
+            var badRequestResult = result as BadRequestObjectResult;
+            
+            var response = badRequestResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("INVALID_SEMESTER");
+        }
+
+        [Fact]
+        public async Task GetStudentPerformance_StudentNotFound_ReturnsNotFound()
+        {
+            // Arrange
+            var studentId = "NONEXISTENT";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToStudentAsync(It.IsAny<string>(), studentId))
+                .ReturnsAsync(true);
+            _mockPerformanceService.Setup(x => x.GetStudentPerformanceAsync(studentId, null, null))
+                .ReturnsAsync((StudentPerformanceResponse)null);
+
+            // Act
+            var result = await _controller.GetStudentPerformance(studentId);
+
+            // Assert
+            result.Should().BeOfType<NotFoundObjectResult>();
+            var notFoundResult = result as NotFoundObjectResult;
+            
+            var response = notFoundResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("STUDENT_NOT_FOUND");
+        }
+    }
+}
+```
+
+### **6. StatisticsControllerTests.cs**
+```csharp
+using Xunit;
+using Moq;
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
+using CollegeSystem.API.Controllers;
+using CollegeSystem.API.Services;
+using CollegeSystem.API.Models;
+using System.Linq;
+
+namespace CollegeSystem.API.Tests.Controllers
+{
+    public class StatisticsControllerTests
+    {
+        private readonly Mock<IStatisticsService> _mockStatisticsService;
+        private readonly Mock<IAuthorizationService> _mockAuthService;
+        private readonly Mock<ILogger<StatisticsController>> _mockLogger;
+        private readonly StatisticsController _controller;
+
+        public StatisticsControllerTests()
+        {
+            _mockStatisticsService = new Mock<IStatisticsService>();
+            _mockAuthService = new Mock<IAuthorizationService>();
+            _mockLogger = new Mock<ILogger<StatisticsController>>();
+            
+            _controller = new StatisticsController(
+                _mockStatisticsService.Object,
+                _mockAuthService.Object,
+                _mockLogger.Object);
+        }
+
+        [Fact]
+        public async Task GetGroupStatistics_ValidRequest_ReturnsOk()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            var statistics = new GroupStatisticsResponse();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupStatisticsAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+            _mockStatisticsService.Setup(x => x.GetGroupStatisticsAsync(groupId, null, null, null))
+                .ReturnsAsync(statistics);
+
+            // Act
+            var result = await _controller.GetGroupStatistics(groupId);
+
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+            var okResult = result as OkObjectResult;
+            
+            var response = okResult.Value as ApiResponse<GroupStatisticsResponse>;
+            response.Success.Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task GetGroupStatistics_NoAccessToStatistics_ReturnsForbidden()
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupStatisticsAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(false);
+
+            // Act
+            var result = await _controller.GetGroupStatistics(groupId);
+
+            // Assert
+            result.Should().BeOfType<ObjectResult>();
+            var objectResult = result as ObjectResult;
+            objectResult.StatusCode.Should().Be(403);
+            
+            var response = objectResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("ACCESS_DENIED");
+        }
+
+        [Theory]
+        [InlineData("invalid")]
+        [InlineData("year")]
+        public async Task GetGroupStatistics_InvalidPeriod_ReturnsBadRequest(string invalidPeriod)
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupStatisticsAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+
+            // Act
+            var result = await _controller.GetGroupStatistics(groupId, invalidPeriod);
+
+            // Assert
+            result.Should().BeOfType<BadRequestObjectResult>();
+            var badRequestResult = result as BadRequestObjectResult;
+            
+            var response = badRequestResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("INVALID_PERIOD");
+        }
+
+        [Theory]
+        [InlineData("week")]
+        [InlineData("month")]
+        [InlineData("semester")]
+        public async Task GetGroupStatistics_ValidPeriod_ReturnsOk(string validPeriod)
+        {
+            // Arrange
+            var groupId = "IT-21-1";
+            var statistics = new GroupStatisticsResponse();
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupStatisticsAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+            _mockStatisticsService.Setup(x => x.GetGroupStatisticsAsync(groupId, validPeriod, null, null))
+                .ReturnsAsync(statistics);
+
+            // Act
+            var result = await _controller.GetGroupStatistics(groupId, validPeriod);
+
+            // Assert
+            result.Should().BeOfType<OkObjectResult>();
+        }
+
+        [Fact]
+        public async Task GetGroupStatistics_GroupNotFound_ReturnsNotFound()
+        {
+            // Arrange
+            var groupId = "NONEXISTENT";
+            
+            _mockAuthService.Setup(x => x.ValidateTokenAsync(It.IsAny<string>()))
+                .ReturnsAsync(true);
+            _mockAuthService.Setup(x => x.HasAccessToGroupStatisticsAsync(It.IsAny<string>(), groupId))
+                .ReturnsAsync(true);
+            _mockStatisticsService.Setup(x => x.GetGroupStatisticsAsync(groupId, null, null, null))
+                .ReturnsAsync((GroupStatisticsResponse)null);
+
+            // Act
+            var result = await _controller.GetGroupStatistics(groupId);
+
+            // Assert
+            result.Should().BeOfType<NotFoundObjectResult>();
+            var notFoundResult = result as NotFoundObjectResult;
+            
+            var response = notFoundResult.Value as ApiResponse<object>;
+            response.ErrorCode.Should().Be("GROUP_NOT_FOUND");
+        }
+    }
+}
+```
+
+## **ВАЖНЫЕ ШАГИ В VISUAL STUDIO:**
+
+### **1. Установка NuGet пакетов для тестового проекта:**
+```xml
+<!-- CollegeSystem.API.Tests.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.3.2" />
+    <PackageReference Include="xunit" Version="2.4.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector" Version="3.1.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Moq" Version="4.18.4" />
+    <PackageReference Include="FluentAssertions" Version="6.11.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CollegeSystem.API\CollegeSystem.API.csproj" />
+  </ItemGroup>
+</Project>
+```
+
+### **2. Запуск тестов:**
+1. Откройте **Test Explorer** (Тест → Обозреватель тестов)
+2. Соберите решение (Build → Build Solution)
+3. Все тесты появятся в Test Explorer
+4. Нажмите **Run All** для запуска всех тестов
+
+### **3. Структура моделей (пример):**
+```csharp
+// Models/ApiResponse.cs
+namespace CollegeSystem.API.Models
+{
+    public class ApiResponse<T>
+    {
+        public bool Success { get; set; }
+        public T Data { get; set; }
+        public string ErrorCode { get; set; }
+        public string Message { get; set; }
+    }
+}
+```
+
+### **4. Настройка Program.cs:**
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Register your services
+builder.Services.AddScoped<IStudentService, StudentService>();
+builder.Services.AddScoped<IAssignmentService, AssignmentService>();
+builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
+// ... other services
+
+var app = builder.Build();
+
+// Configure pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+```
+
