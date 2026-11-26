@@ -29,3 +29,5 @@ server {
 }
 
 sudo ln -s /etc/nginx/sites-available/moodle-new /etc/nginx/sites-enabled/moodle-new
+
+sudo cp /var/www/html/moodle/config.php /var/www/html/moodle/config.php.backup
