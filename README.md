@@ -35,3 +35,5 @@ sudo cp /var/www/html/moodle/config.php /var/www/html/moodle/config.php.backup
 php -m | grep -Ei 'curl|dom|gd|mbstring|openssl|posix|session|simplexml|xmlreader|xmlwriter|zip|zlib|pdo_mysql'
 
 php -m | grep -Ei 'fileinfo|intl|pdo_mysql|bz2|sodium'
+
+wget https://download.nextcloud.com/server/releases/latest.zip
