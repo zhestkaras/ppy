@@ -27,3 +27,5 @@ server {
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
     }
 }
+
+sudo ln -s /etc/nginx/sites-available/moodle-new /etc/nginx/sites-enabled/moodle-new
