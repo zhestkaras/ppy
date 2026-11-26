@@ -31,3 +31,5 @@ server {
 sudo ln -s /etc/nginx/sites-available/moodle-new /etc/nginx/sites-enabled/moodle-new
 
 sudo cp /var/www/html/moodle/config.php /var/www/html/moodle/config.php.backup
+
+php -m | grep -Ei 'curl|dom|gd|mbstring|openssl|posix|session|simplexml|xmlreader|xmlwriter|zip|zlib|pdo_mysql'
