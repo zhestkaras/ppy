@@ -344,3 +344,41 @@ work@debian:/tmp$ curl -s http://quinque.local | grep -i nextcloud
                                                 Nextcloud                                      <        /h1>
                                 <a href="https://nextcloud.com" target="_blank" rel="noreferrer         noopener">Nextcloud</a> – a safe home for all your data                 </p>
 
+
+
+
+
+work@debian:/tmp$ ls -ld /var/www/nextcloud/data
+drwxr-xr-x 4 www-data www-data 4096 Nov 26 21:07 /var/www/nextcloud/data
+work@debian:/tmp$ sudo tail -n 30 /var/log/nginx/error.log
+2026/11/26 21:08:55 [error] 1565#1565: *45 upstream timed out (110: Connection timed out) while reading              response header from upstream, client: 10.0.2.2, server: quinque.local, request: "GET /ocs/v2.php/apps/a             ppstore/api/v1/apps HTTP/1.1", upstream: "fastcgi://unix:/run/php/php8.4-fpm.sock", host: "quinque.local             "
+work@debian:/tmp$ sudo tail -n 30 /var/log/nginx/error.log
+2026/11/26 21:08:55 [error] 1565#1565: *45 upstream timed out (110: Connection timed out) while reading              response header from upstream, client: 10.0.2.2, server: quinque.local, request: "GET /ocs/v2.php/apps/a             ppstore/api/v1/apps HTTP/1.1", upstream: "fastcgi://unix:/run/php/php8.4-fpm.sock", host: "quinque.local             "
+work@debian:/tmp$ sudo journalctl -u php8.4-fpm -n 20 --no0-pager
+journalctl: unrecognized option '--no0-pager'
+work@debian:/tmp$ sudo journalctl -u php8.4-fpm -n 20 --no-pager
+Nov 24 21:42:21 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+Nov 24 21:49:06 debian systemd[1]: Stopping php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 24 21:49:07 debian systemd[1]: php8.4-fpm.service: Deactivated successfully.
+Nov 24 21:49:07 debian systemd[1]: Stopped php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+-- Boot fc72af1d7c9b4845b02cea326a7e3232 --
+Nov 24 21:49:27 debian systemd[1]: Starting php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 24 21:49:27 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+Nov 24 21:50:07 debian systemd[1]: Stopping php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 24 21:50:07 debian systemd[1]: php8.4-fpm.service: Deactivated successfully.
+Nov 24 21:50:07 debian systemd[1]: Stopped php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+-- Boot b6aeb9dd2768499aa4d43fac407c2563 --
+Nov 24 21:50:26 debian systemd[1]: Starting php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 24 21:50:26 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+Nov 24 21:57:20 debian systemd[1]: Stopping php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 24 21:57:20 debian systemd[1]: php8.4-fpm.service: Deactivated successfully.
+Nov 24 21:57:20 debian systemd[1]: Stopped php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+-- Boot 48e0b43703c8436eb27efdc62846919e --
+Nov 24 21:57:38 debian systemd[1]: Starting php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 24 21:57:38 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+-- Boot a5f21ffe5eb54497baa08048969a66f6 --
+Nov 25 22:22:19 debian systemd[1]: Starting php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 25 22:22:19 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+-- Boot 4f8b213426f34afd9176b8b04131bbce --
+Nov 26 18:03:54 debian systemd[1]: Starting php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
+Nov 26 18:03:54 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
