@@ -385,3 +385,63 @@ Nov 26 18:03:54 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 Fast
 
 
 sudo grep -nE 'fastcgi_read_timeout|fastcgi_connect_timeout' /etc/nginx/sites-available/nextcloud
+
+
+
+
+
+
+
+
+
+
+
+
+work@debian:/tmp$ sudo ls -l /etc/nginx/sites-enabled/
+total 0
+lrwxrwxrwx 1 root root 33 Nov 16 21:11 moodle -> /etc/nginx/sites-available/moodle
+lrwxrwxrwx 1 root root 37 Nov 25 23:16 moodle-new -> /etc/nginx/sites-available/moodle-new
+lrwxrwxrwx 1 root root 36 Nov 26 19:55 nextcloud -> /etc/nginx/sites-available/nextcloud
+lrwxrwxrwx 1 root root 37 Nov 16 21:12 phpmyadmin -> /etc/nginx/sites-available/phpmyadmin
+work@debian:/tmp$ sudo ls -l /etc/nginx/sites-available/
+total 20
+-rw-r--r-- 1 root root 2412 Sep 15 06:37 default
+-rw-r--r-- 1 root root 1183 Nov 26 20:57 moodle
+-rw-r--r-- 1 root root  436 Nov 25 23:15 moodle-new
+-rw-r--r-- 1 root root  837 Nov 26 21:23 nextcloud
+-rw-r--r-- 1 root root  294 Nov 16 21:26 phpmyadmin
+work@debian:/tmp$ sudo nginx -T | grep -nE 'server_name|root|alias|location'
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+25:     # server_names_hash_bucket_size 64;
+26:     # server_name_in_redirect off;
+193:    server_name quinque.local;
+198:    root /var/www/html/moodle;
+201:    location / {
+205:    location ~ [^/]\.php(/|$) {
+210:        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+217:    location ^~ /phpmyadmin/ {
+218:        alias /usr/share/phpmyadmin/;
+220:        location ~ ^/phpmyadmin/(.+.php)$ {
+221:            alias /usr/share/phpmyadmin/$1;
+241:fastcgi_param  DOCUMENT_ROOT      $document_root;
+254:fastcgi_param  SERVER_NAME        $server_name;
+293:    server_name moodle;
+295:    root /var/www/html;
+298:    location = /quinque.local {
+302:    location /quinque.local/ {
+306:    location ~ ^/quinque\.local/.+\.php$ {
+329:fastcgi_param  SCRIPT_FILENAME    $document_root$fastcgi_script_name;
+338:fastcgi_param  DOCUMENT_ROOT      $document_root;
+351:fastcgi_param  SERVER_NAME        $server_name;
+361:    server_name quinque.local;
+363:    root /var/www/nextcloud;
+373:    location / {
+377:    location ~ \.php(?:$|/) {
+384:        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+390:    location ~ /\.(?!well-known).* {
+398:    server_name pma.local;
+399:    root /usr/share/phpmyadmin;
+402:    location / {
+406:    location ~ \.php$ {
+work@debian:/tmp$
