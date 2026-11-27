@@ -81,3 +81,5 @@ server {
 }
 
 sudo ln -s /etc/nginx/sites-available/nextcloud /etc/nginx/sites-enabled/
+
+sudo grep -RniE 'quinque\.local|return 30[12]|rewrite' /etc/nginx/sites-enabled/
