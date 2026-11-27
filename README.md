@@ -382,3 +382,6 @@ Nov 25 22:22:19 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 Fast
 -- Boot 4f8b213426f34afd9176b8b04131bbce --
 Nov 26 18:03:54 debian systemd[1]: Starting php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager...
 Nov 26 18:03:54 debian systemd[1]: Started php8.4-fpm.service - The PHP 8.4 FastCGI Process Manager.
+
+
+sudo grep -nE 'fastcgi_read_timeout|fastcgi_connect_timeout' /etc/nginx/sites-available/nextcloud
