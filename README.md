@@ -45,3 +45,37 @@ CREATE DATABASE nextcloud CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 CREATE USER 'ncuser'@'localhost' IDENTIFIED BY 'NcCloud_2026_Strong!';
 GRANT ALL PRIVILEGES ON nextcloud.* TO 'ncuser'@'localhost';
 FLUSH PRIVILEGES;
+
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name quinque.local;
+
+    root /var/www/nextcloud;
+    index index.php index.html /index.php$request_uri;
+
+    client_max_body_size 512M;
+    fastcgi_buffers 64 4K;
+
+    location / {
+        try_files $uri $uri/ /index.php$request_uri;
+    }
+
+    location ~ \.php(?:$|/) {
+        fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+        set $path_info $fastcgi_path_info;
+
+        try_files $fastcgi_script_name =404;
+
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $path_info;
+
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
