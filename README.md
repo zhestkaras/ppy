@@ -338,3 +338,9 @@ server {
     }
 }
 
+
+work@debian:/tmp$ curl -s http://quinque.local | grep -i nextcloud
+                        Nextcloud               </title>
+                                                Nextcloud                                      <        /h1>
+                                <a href="https://nextcloud.com" target="_blank" rel="noreferrer         noopener">Nextcloud</a> – a safe home for all your data                 </p>
+
