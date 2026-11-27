@@ -79,3 +79,5 @@ server {
         deny all;
     }
 }
+
+sudo ln -s /etc/nginx/sites-available/nextcloud /etc/nginx/sites-enabled/
