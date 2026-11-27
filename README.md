@@ -37,3 +37,11 @@ php -m | grep -Ei 'curl|dom|gd|mbstring|openssl|posix|session|simplexml|xmlreade
 php -m | grep -Ei 'fileinfo|intl|pdo_mysql|bz2|sodium'
 
 wget https://download.nextcloud.com/server/releases/latest.zip
+
+sudo chown -R www-data:www-data /var/www/nextcloud
+sudo chmod -R 750 /var/www/nextcloud
+
+CREATE DATABASE nextcloud CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+CREATE USER 'ncuser'@'localhost' IDENTIFIED BY 'NcCloud_2026_Strong!';
+GRANT ALL PRIVILEGES ON nextcloud.* TO 'ncuser'@'localhost';
+FLUSH PRIVILEGES;
